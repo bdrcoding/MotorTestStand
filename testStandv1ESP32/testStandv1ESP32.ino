@@ -276,6 +276,9 @@ void runTest(int speed) {
   setMotorSpeed(speed);
 
   float currentV = readCurrent();
+  if (currentV < 4.73){
+    currentV = 0;
+  }
   float voltageV = readVoltage();
   float load = getLoad();
 
