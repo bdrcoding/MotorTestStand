@@ -51,6 +51,10 @@ File logfile;
 // ================= STATE =================
 bool runningTest = false;
 bool previousSwitchState = false;
+bool stableSwitchState = false;
+
+unsigned long lastSwitchChange = 0;
+const unsigned long debounceTime = 50;
 bool sdFailed = false;
 
 int testLength = 5;
@@ -66,6 +70,11 @@ unsigned long lastFlush = 0;
 void setup() {
   Serial.begin(115200);
 
+  // ESC PWM (ESP32-safe)
+  ESC.attach(escPin, 1000, 2000);
+  ESC.writeMicroseconds(1000);
+  delay(5000);
+
   WiFi.begin(ssid);
   Serial.print("Connecting WiFi");
 
@@ -80,6 +89,7 @@ void setup() {
   udp.begin(UDP_PORT);
 
   analogSetPinAttenuation(currentPin, ADC_11db);
+  analogSetPinAttenuation(voltagePin, ADC_11db);
   // UART link to other ESP32
   pinMode(switchPin, INPUT_PULLUP);
 
@@ -94,11 +104,6 @@ void setup() {
   if (getMotorPot() > 5) {
     exit(0);
   }
-
-  // ESC PWM (ESP32-safe)
-  ESC.attach(escPin, 1000, 2000);
-  ESC.writeMicroseconds(1000);
-  delay(5000);
 
   // SD
   if (!SD.begin(chipSelect)) {
@@ -128,14 +133,14 @@ bool getSwitch() {
   return digitalRead(switchPin) == LOW;
 }
 
-float getLoad(){
-    static boolean newDataReady = 0;
-    if (LoadCell.update()) newDataReady = true;
-    if (newDataReady) {
-        float i = LoadCell.getData();
-        return i; //In grams
-      }
-    return 0.0;
+float getLoad() {
+  static float lastLoad = 0;
+
+  if (LoadCell.update()) {
+    lastLoad = LoadCell.getData();
+  }
+
+  return lastLoad;
 }
 
 void tareLoadCell(){
@@ -271,6 +276,27 @@ void readUDP() {
   }
 }
 
+bool getDebouncedSwitchPress() {
+  bool reading = getSwitch();
+
+  if (reading != previousSwitchState) {
+    lastSwitchChange = millis();
+    previousSwitchState = reading;
+  }
+
+  if (millis() - lastSwitchChange > debounceTime) {
+    if (reading != stableSwitchState) {
+      stableSwitchState = reading;
+
+      if (stableSwitchState) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
 // ================= TEST =================
 void runTest(int speed) {
   setMotorSpeed(speed);
@@ -304,7 +330,7 @@ void loop() {
 
   bool sw = getSwitch();
 
-  if (sw && !previousSwitchState) {
+  if (getDebouncedSwitchPress()) {
     runningTest = !runningTest;
     testSpeed = getMotorPot();
     startMillis = millis();
@@ -331,6 +357,7 @@ void loop() {
 
   if (runningTest && testTimer > testLength) {
     runningTest = false;
+    stopLogging()
   }
 
   if (runningTest) {
@@ -340,5 +367,6 @@ void loop() {
   }
 
   previousSwitchState = sw;
+  updateLogging()
   delay(100);
 }
